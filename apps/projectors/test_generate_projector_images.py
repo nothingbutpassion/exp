@@ -1,6 +1,5 @@
 import sys
 import math
-import cv2
 import numpy as np
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QShortcut
@@ -15,6 +14,7 @@ from generate_projector_images import (
     tranform_points,
     get_screen_regions,
     rectify_screen_regions,
+    adjust_screen_regions,
     screen_buffer_homographies,
     get_buffer_width,
     split_buffers
@@ -39,17 +39,6 @@ D1 = 730                                                # distance between 2 pro
 D2 = 1450                                               # distance from projectors-center to screen
 ALPHA = math.radians(22.5)                              # screen angle relative to projectors
 
-def print_values(values, prefix=""):
-    s = f"{prefix}"
-    for v in values:
-        if type(v) is [list, np.ndarray]:
-            for e in v:
-                s += f" {float(v):.6}"
-            s += "\n"
-        else:
-            s += f" {float(v):.6}"
-    print(s)
-
 def print_pixel_points(points, prefix=""):
     s = f"{prefix}"
     for x, y in points:
@@ -64,27 +53,6 @@ def print_fpga_info(buf_w, prj_w, prj_h, Hl1, Hr2):
     pts1 = tranform_points(corners, np.linalg.inv(Hr2))
     print_pixel_points(pts1, "P5-P8:")
 
-def imshow(win_name, image, fx=0.5, fy=0.5):
-    image = cv2.resize(image, dsize=None, fx=fx, fy=fx)
-    cv2.imshow(win_name, image)
-
-# Only for debugging
-def demo_image(w, h):
-    img = np.zeros((h, w, 3), dtype=np.uint8)
-    # bounding box
-    d = 5
-    img[:d]     = (0, 0, 255)    # top
-    img[-d:]    = (0, 255, 0)    # bottom
-    img[:,:d]   = (255, 0, 0)    # left
-    img[:,-d:]  = (0, 255, 255)  # right
-    # cross line
-    img[:,(w-d)//2:(w+d)//2]    = (255, 255, 0)
-    img[(h-d)//2:(h+d)//2]      = (255, 255, 0)
-    # center circle
-    r = min(w//2, h//2) - d
-    cv2.circle(img, (w//2, h//2), r, (255, 0, 255), 3, cv2.LINE_AA)
-    return img
-
 def numpy_to_qpixmap(img):
     h, w, c = img.shape
     bytes_per_line = c * w
@@ -97,28 +65,18 @@ def test_multi_screen_show(image_path):
     T13, T23 = screen_projector_transforms(D1, D2, ALPHA)
     H13, H23 = screen_projector_homographies(K1, K2, T13, T23)
     H31, H32 = np.linalg.inv(H13), np.linalg.inv(H23)
-
     screen_r1, screen_r2 = get_screen_regions(H31, H32, PRJ_W, PRJ_H)
-    screen_r1, screen_r2, overlap_r = rectify_screen_regions(screen_r1, screen_r2)
+    screen_r1, screen_r2 = rectify_screen_regions(screen_r1, screen_r2)
+    screen_r1, screen_r2, overlap_r = adjust_screen_regions(screen_r1, screen_r2, PRJ_W, PRJ_H)
     buf_w = get_buffer_width(overlap_r, PRJ_W, PRJ_H)
     image = load_image(image_path, buf_w, PRJ_H)
-    
     buf1, buf2 = split_buffers(image, PRJ_W, PRJ_H)
     Hl3, Hr3 = screen_buffer_homographies(overlap_r, PRJ_W, PRJ_H)
     Hl1 = Hl3 @ H31
     Hr2 = Hr3 @ H32
-
     print_fpga_info(buf_w, PRJ_W, PRJ_H, Hl1, Hr2)
-
     image1 = warp_image(buf1, Hl1)
     image2 = warp_image(buf2, Hr2)
-
-    # only for debugging
-    # imshow("input image", image, fx=0.5, fy=0.5)
-    # imshow("left  image", image1, fx=0.5, fy=0.5)
-    # imshow("right image", image2, fx=0.5, fy=0.5)
-    # cv2.waitKey()
-
     app = QApplication(sys.argv)
     pixmaps = [numpy_to_qpixmap(image1), numpy_to_qpixmap(image2)]
     screens = app.screens()

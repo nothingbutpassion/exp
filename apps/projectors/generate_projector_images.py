@@ -95,40 +95,73 @@ def get_screen_regions(H31, H32, prj_w, prj_h):
     screen_r2 = tranform_points(corners, H32)   # right projection points in screen
     return screen_r1, screen_r2
 
-# NOTES: This function can't be used for screen image regions
 def rectify_screen_regions(screen_r1, screen_r2):
     p1, p2, p3, p4 = screen_r1  # left quad in screen
     p5, p6, p7, p8 = screen_r2  # right quad in screen
-    # adjust top points
-    p1[1] = p2[1] = p5[1] = p6[1] = min(p1[1], p2[1], p5[1], p6[1])
-    # adjust bottom points
-    p3[1]= p4[1] = p7[1] = p8[1] = max(p3[1], p4[1], p7[1], p8[1])
+    # adjust top & bottom points
+    if p3[1] < p1[1]:
+        p1[1] = p2[1] = p5[1] = p6[1] = min(p1[1], p2[1], p5[1], p6[1])
+        p3[1] = p4[1] = p7[1] = p8[1] = max(p3[1], p4[1], p7[1], p8[1])
+    else:
+        p1[1] = p2[1] = p5[1] = p6[1] = max(p1[1], p2[1], p5[1], p6[1])
+        p3[1] = p4[1] = p7[1] = p8[1] = min(p3[1], p4[1], p7[1], p8[1])
     # adjust left region
     p1[0] = p4[0] = max(p1[0], p4[0])
     p2[0] = p3[0] = min(p2[0], p3[0])
     # adjust right region
     p5[0] = p8[0] = max(p5[0], p8[0])
     p6[0] = p7[0] = min(p6[0], p7[0])
-    overlap_r = [p5, p2, p3, p8]
-    return screen_r1, screen_r2, overlap_r
+    return screen_r1, screen_r2
 
-def get_buffer_width(overlap, prj_w, prj_h):
-    p1, p2, p3, p4 = overlap
+def get_buffer_width(overlap_r, prj_w, prj_h):
+    p1, _, p3, _ = overlap_r
     screen_w = p3[0] - p1[0]
     screen_h = abs(p3[1] - p1[1])
     overlap_w = round(prj_h*screen_w/screen_h)
-    # NOTES: overlap width may be very large
-    # TODO: compute overlap with to make display region more widers
-    if overlap_w >= 2*prj_w:
-        overlap_w = 0
-    elif overlap_w > prj_w:
-        overlap_w = min(overlap_w, prj_w)
-    elif overlap_w < 0:
-        overlap_w = max(overlap_w, 0)
+    overlap_w = max(0, min(overlap_w, prj_w))
     buf_w = 2*prj_w - overlap_w
     return buf_w
 
-def smoothstep_mask(w, h, s, e):
+def adjust_screen_regions(r1, r2, prj_w, prj_h, min_overlap=32):
+    p1, p2, p3, p4 = r1
+    p5, p6, p7, p8 = r2
+    h = abs(p4[1] - p1[1])          # screen height
+    s = prj_h/h                     # scale to prj_h
+
+    overlap_r = [p5, p2, p3, p8]
+    overlap_w = s*(p2[0] - p5[0])
+
+    # overlap is too small
+    if overlap_w < min_overlap:
+        return r1, r2, overlap_r
+
+    w1 = s*(p2[0] - p1[0]) 
+    w2 = s*(p6[0] - p5[0])
+
+    # left quad is smaller
+    if w1 < w2:
+        left_w = s*(p5[0] - p1[0])
+        if left_w + min_overlap < prj_w:
+            # extends to left bounding   
+            p2[0] = p3[0] = min(p1[0] + prj_w/s, p2[0]) 
+        else:
+            p2[0] = p3[0] = min(p5[0] + min_overlap/s, p2[0]) 
+            p1[0] = p4[0] = max(p2[0] - prj_w/s, p1[0])
+        p6[0] = p7[0] = min(p5[0] + prj_w/s, p6[0])
+        return r1, r2, overlap_r
+    
+    # right quad is smaller
+    right_w = s*(p6[0] - p2[0])
+    if right_w + min_overlap < prj_w:
+        # extends to right bounding
+        p5[0] = p8[0] = max(p7[0] - prj_w/s, p5[0]) 
+    else:
+        p5[0] = p8[0] = max(p2[0] - min_overlap/s, p5[0]) 
+        p6[0] = p7[0] = min(p5[0] + prj_w/s, p6[0])
+    p1[0] = p4[0] = max(p2[0] - prj_w/s, p1[0])
+    return r1, r2, overlap_r
+
+def smoothstep_mask(w, s, e):
     t = np.linspace(s, e, w)
     t = 3*t**2 - 2*t**3
     return t.reshape(w, 1)
@@ -141,13 +174,13 @@ def split_buffers(image, prj_w, prj_h):
     # left buffer
     buf1 = np.zeros((prj_h, prj_w, 3))
     buf1[:,0:prj_w,:] = image[:,0:prj_w,:]
-    buf1[:,x:x+ow,:] *= smoothstep_mask(ow, prj_h, 1, 0)
+    buf1[:,x:x+ow,:] *= smoothstep_mask(ow, 1, 0)
     buf1 = np.array(buf1, dtype=np.uint8)
 
     # right buffer
     buf2 = np.zeros((prj_h, prj_w, 3))
     buf2[:,0:prj_w,:] = image[:,x:x+prj_w,:]
-    buf2[:,0:ow,:] *= smoothstep_mask(ow, prj_h, 0, 1)
+    buf2[:,0:ow,:] *= smoothstep_mask(ow, 0, 1)
     buf2 = np.array(buf2, dtype=np.uint8)
     return buf1, buf2
 

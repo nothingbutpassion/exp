@@ -10,6 +10,8 @@ from generate_projector_images import (
     warp_image,
     tranform_points,
     get_screen_regions,
+    rectify_screen_regions,
+    adjust_screen_regions,
     screen_buffer_homographies,
     get_buffer_width,
     split_buffers
@@ -129,22 +131,6 @@ def screen_projector_homography(captured_img, cell_w, cell_h, x_cells, y_cells):
     H, _ = cv2.findHomography(src, dst)
     return H
 
-def adjust_screen_regions(screen_r1, screen_r2):
-    p1, p2, p3, p4 = screen_r1  # left quad in screen
-    p5, p6, p7, p8 = screen_r2  # right quad in screen
-    # adjust top points
-    p1[1] = p2[1] = p5[1] = p6[1] = max(p1[1], p2[1], p5[1], p6[1])
-    # adjust bottom points
-    p3[1]= p4[1] = p7[1] = p8[1] = min(p3[1], p4[1], p7[1], p8[1])
-    # adjust left region
-    p1[0] = p4[0] = max(p1[0], p4[0])
-    p2[0] = p3[0] = min(p2[0], p3[0])
-    # adjust right region
-    p5[0] = p8[0] = max(p5[0], p8[0])
-    p6[0] = p7[0] = min(p6[0], p7[0])
-    overlap_r = [p5, p2, p3, p8]
-    return screen_r1, screen_r2, overlap_r
-
 def grab_projector_image(capture, image1, image2):
     # grab image
     captured = []
@@ -162,6 +148,7 @@ def grab_projector_image(capture, image1, image2):
 
 def calibrate_projectors(capture, image_path):
     PRJ_W, PRJ_H = 1920, 1080
+    MIN_OVERLAP = 32
     CELL_W, CELL_H = 240, 180
     X_CELLS, Y_CELLS = PRJ_W//CELL_W, PRJ_H//CELL_H
 
@@ -186,7 +173,9 @@ def calibrate_projectors(capture, image_path):
         return False
     
     screen_r1, screen_r2 = get_screen_regions(H31, H32, PRJ_W, PRJ_H)
-    screen_r1, screen_r2, overlap_r = adjust_screen_regions(screen_r1, screen_r2)
+    screen_r1, screen_r2 = rectify_screen_regions(screen_r1, screen_r2)
+
+    screen_r1, screen_r2, overlap_r = adjust_screen_regions(screen_r1, screen_r2, PRJ_W, PRJ_H, MIN_OVERLAP)
 
     buf_w = get_buffer_width(overlap_r, PRJ_W, PRJ_H)
     if image_path is not None: 
