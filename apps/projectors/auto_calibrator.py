@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QShortcut
 from PyQt6.QtCore import Qt, QTimer, QEventLoop
 
-from generate_projector_images import (
+from dual_projection import (
     load_image,
     warp_image,
     tranform_points,
@@ -80,8 +80,8 @@ def project_images(image1, image2, grab_image=None, delay_ms=3000):
     loop = QEventLoop()
     if grab_image is not None:
         QTimer.singleShot(1000, grab_image)
-    QTimer.singleShot(delay_ms, loop.quit)  # Schedule quit event
-    loop.exec()
+    QTimer.singleShot(delay_ms, loop.quit)
+    loop.exec() # enters main event loop and waits until exit/quit
     app.exit(0)
 
 def generate_chessboard_image(w, h, cell_w, cell_h, color1=(255, 255, 255), color2=(0, 0, 0)):

@@ -60,7 +60,7 @@ def screen_projector_transforms(d1, d2, alpha):
     T03[:3,:3] = np.array([
         [math.cos(alpha), -math.sin(alpha), 0],
         [math.sin(alpha),  math.cos(alpha), 0],
-        [0,                 0,                1]
+        [0,                 0,              1]
     ])
     T13 = T10 @ T03 # fram3 -> frame 1
     T23 = T20 @ T03 # fram3 -> frame 2

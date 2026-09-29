@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QShortcut
 from PyQt6.QtCore import Qt
 
-from generate_projector_images import (
+from dual_projection import (
     load_image,
     warp_image,
     projection_matrix,
