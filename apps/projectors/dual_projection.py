@@ -16,14 +16,22 @@ def warp_image(img, H):
     # If cv2.WARP_INVERSE_MAP specified, OpenCV does not invert your matrix
     return cv2.warpPerspective(img, H, dsize=(img_w, img_h), flags=cv2.WARP_INVERSE_MAP)
 
-def camera_matrix(w, h, fov_h, fov_v):
-    cx, cy = 0.5*w, 0.5*h
-    fx, fy = 0.5*w/math.tan(0.5*fov_h), 0.5*h/math.tan(0.5*fov_v)
-    return np.array([
-        [fx, 0,  cx],
-        [0,  fy, cy],
-        [0,  0,  1 ]
-    ])
+def save_calib_data(yaml_path, img_size, img_roi):
+    data = {
+        "image_size": img_size, 
+        "image_roi": img_roi,
+    }
+    fs = cv2.FileStorage(yaml_path, cv2.FILE_STORAGE_WRITE)
+    for k, v in data.items():
+        fs.write(k, v)
+    fs.release()
+    print(f"saved {yaml_path}")
+
+def load_calib_data(yaml_path):
+    fs = cv2.FileStorage(yaml_path, cv2.FILE_STORAGE_READ)
+    img_size = fs.getNode("image_size").mat 
+    img_roi = fs.getNode("image_roi").mat()
+    return img_size, img_roi
 
 # sepcial camera matrix for debugging
 def projection_matrix(w, h, fov_h, fov_v):
@@ -36,50 +44,6 @@ def projection_matrix(w, h, fov_h, fov_v):
             [0,  fy, cy],
             [0,  0,  1 ]
         ])
-
-def screen_projector_transforms(d1, d2, alpha):
-    # frame0 (x0, y0, z0, 1) -> frame1 (x1, y1, z1, 1)
-    T10 = np.identity(4)
-    T10[:3, 3] = np.array([d1/2, 0, 0]) 
-    T10[:3,:3] = np.array([
-        [1, 0, 0 ],
-        [0, 0, -1],
-        [0, 1, 0 ]
-    ])
-    # frame0 -> frame2
-    T20 = np.identity(4)
-    T20[:3, 3] = np.array([-d1/2, 0, 0])
-    T20[:3,:3] = np.array([
-        [1, 0, 0 ],
-        [0, 0, -1],
-        [0, 1, 0 ]
-    ])
-    # frame3 -> frame0
-    T03 = np.identity(4)
-    T03[:3, 3] = np.array([0, d2, 0])
-    T03[:3,:3] = np.array([
-        [math.cos(alpha), -math.sin(alpha), 0],
-        [math.sin(alpha),  math.cos(alpha), 0],
-        [0,                 0,              1]
-    ])
-    T13 = T10 @ T03 # fram3 -> frame 1
-    T23 = T20 @ T03 # fram3 -> frame 2
-    return T13, T23
-
-def screen_projector_homographies(K1, K2, T13, T23):
-    # screen point (x3, z3, 1) -> left projector image point (u1, v1, 1)
-    H13 = np.zeros((3, 3))
-    H13[:,0] = T13[:3,0]    # 1st column of Rotation matrix
-    H13[:,1] = T13[:3,2]    # 3rd column of Roataion matrix
-    H13[:,2] = T13[:3,3]    # translation
-    H13 = K1 @ H13
-    # screen point (x3, z3, 1) -> left projector image point (u2, v2, 1)
-    H23 = np.zeros((3, 3))
-    H23[:,0] = T23[:3,0]
-    H23[:,1] = T23[:3,2]
-    H23[:,2] = T23[:3,3]
-    H23 = K2 @ H23
-    return H13, H23
 
 def tranform_points(src_points, H):
     dst_points = []

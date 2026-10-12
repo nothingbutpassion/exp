@@ -9,7 +9,6 @@ from dual_projection import (
     load_image,
     warp_image,
     projection_matrix,
-    screen_projector_transforms,
     screen_projector_homographies,
     tranform_points,
     get_screen_regions,
@@ -22,7 +21,7 @@ from dual_projection import (
 
 # NOTES: 
 # There are 4 coordinate frames:
-# frame0: dual-projectors-center frame (origin is ground projection point of the center)
+# frame0: camera frame
 # frame1: left projector frame
 # frame2: right projector frame
 # frame3: screen coordinate frame
@@ -36,7 +35,7 @@ FOV2_H = math.radians(44.34)                            # right projector horizo
 FOV2_V = math.atan(2*math.tan(0.5*FOV2_H)*PRJ_H/PRJ_W)  # right projector vertical fov
 
 D1 = 730                                                # distance between 2 projectors
-D2 = 1450                                               # distance from projectors-center to screen
+D2 = 1450                                               # distance between camera and screen
 ALPHA = math.radians(22.5)                              # screen angle relative to projectors
 
 def print_pixel_points(points, prefix=""):
@@ -58,6 +57,47 @@ def numpy_to_qpixmap(img):
     bytes_per_line = c * w
     q_img = QImage(img.data, w, h, bytes_per_line, QImage.Format.Format_BGR888)
     return QPixmap.fromImage(q_img)
+
+def screen_projector_transforms(d1, d2, alpha):
+    # frame0 -> frame1
+    T10 = np.array([
+        [1, 0, 0, d1/2],
+        [0, 1, 0, 0   ],
+        [0, 0, 1, 0   ],
+        [0, 0, 0, 1   ],
+    ])
+    # frame0 -> frame2
+    T20 = np.array([
+        [1, 0, 0, -d1/2],
+        [0, 1, 0,  0   ],
+        [0, 0, 1,  0   ],
+        [0, 0, 0,  1   ],
+    ])
+    # frame3 -> frame0
+    T03 = np.array([
+        [math.cos(alpha), 0, -math.sin(alpha), 0 ],
+        [0,               1,  1,               0 ],
+        [math.sin(alpha), 0,  math.cos(alpha), d2],
+        [0,               0,  0,               1 ],
+    ])
+    T13 = T10 @ T03     # frame3 -> frame 1
+    T23 = T20 @ T03     # frame3 -> frame 2
+    return T13, T23
+
+def screen_projector_homographies(K1, K2, T13, T23):
+    # screen point (x3, y3, 1) -> left projector image point (u1, v1, 1)
+    H13 = np.zeros((3, 3))
+    H13[:,0] = T13[:3,0]    # 1st column of Rotation matrix
+    H13[:,1] = T13[:3,1]    # 2nd column of Roataion matrix
+    H13[:,2] = T13[:3,3]    # translation
+    H13 = K1 @ H13
+    # screen point (x3, y3, 1) -> left projector image point (u2, v2, 1)
+    H23 = np.zeros((3, 3))
+    H23[:,0] = T23[:3,0]
+    H23[:,1] = T23[:3,1]
+    H23[:,2] = T23[:3,3]
+    H23 = K2 @ H23
+    return H13, H23
 
 def test_multi_screen_show(image_path):
     K1 = projection_matrix(PRJ_W, PRJ_H, FOV1_H, FOV1_V)
@@ -101,5 +141,5 @@ def test_multi_screen_show(image_path):
     sys.exit(app.exec())
 
 if __name__ == "__main__":
-    assert len(sys.argv), f"usage: {sys.argv[0]} <image-file>"
+    assert len(sys.argv) == 2, f"usage: {sys.argv[0]} <image-file>"
     test_multi_screen_show(sys.argv[1])

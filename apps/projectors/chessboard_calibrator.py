@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt, QTimer, QEventLoop
 from dual_projection import (
     load_image,
     warp_image,
+    save_calib_data,
     tranform_points,
     get_screen_regions,
     rectify_screen_regions,
@@ -146,7 +147,7 @@ def grab_projector_image(capture, image1, image2):
         return None
     return captured[0]
 
-def calibrate_projectors(capture, image_path):
+def calibrate_projectors(capture, image_path, param_path):
     PRJ_W, PRJ_H = 1920, 1080
     MIN_OVERLAP = 32
     CELL_W, CELL_H = 240, 180
@@ -173,8 +174,11 @@ def calibrate_projectors(capture, image_path):
         return False
     
     screen_r1, screen_r2 = get_screen_regions(H31, H32, PRJ_W, PRJ_H)
-    screen_r1, screen_r2 = rectify_screen_regions(screen_r1, screen_r2)
 
+    if param_path is not None:
+        save_calib_data(param_path, np.array(captured_img.shape[1::-1]), np.array([screen_r1, screen_r2]))
+
+    screen_r1, screen_r2 = rectify_screen_regions(screen_r1, screen_r2)
     screen_r1, screen_r2, overlap_r = adjust_screen_regions(screen_r1, screen_r2, PRJ_W, PRJ_H, MIN_OVERLAP)
 
     buf_w = get_buffer_width(overlap_r, PRJ_W, PRJ_H)
@@ -214,10 +218,19 @@ def show_camera_view(capture):
             cv2.destroyAllWindows()
             return True
 
+def crate_capture(w=1920, h=1080):
+    cap = cv2.VideoCapture(1)
+    assert cap.isOpened(), f"Can't open video capture"
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+    return cap
+
 if __name__ == "__main__":
-    capture = cv2.VideoCapture(1)
+    capture = crate_capture(640, 480)
     do_calib = show_camera_view(capture)
     if not do_calib:
         sys.exit(1)
-    image_path = sys.argv[1] if len(sys.argv) > 1 else None 
-    calibrate_projectors(capture, image_path)
+    image_path = sys.argv[1] if len(sys.argv) > 1 else None
+    param_path = sys.argv[2] if len(sys.argv) > 2 else None
+    calibrate_projectors(capture, image_path, param_path)

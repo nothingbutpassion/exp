@@ -1,6 +1,6 @@
+import os
 import sys
 import time
-import random
 import cv2
 import numpy as np
 from PyQt6.QtWidgets import QApplication, QWidget, QMainWindow, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
@@ -8,7 +8,6 @@ from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtCore import Qt, QTimer
 
 class FocusUtils:
-
     @staticmethod
     def generate_box_blur_images(original, num_images, ksize=(7, 7)):
         image = original
@@ -20,7 +19,7 @@ class FocusUtils:
 
     @staticmethod
     def generate_pyramid_blur_images(original, num_images):
-        down_scales = np.linspace(0.9, 0.1, num_images)
+        down_scales = np.linspace(0.5, 0.025, num_images)
         image = original
         w, h = image.shape[1::-1]
         down_imgs = []
@@ -35,9 +34,8 @@ class FocusUtils:
             blured.append(image)
         return list(reversed(blured)) 
 
-    # generate generate_defocus_blur_images
     @staticmethod
-    def generate_defocus_blur_images(original, num_images, max_radius=20):
+    def generate_defocus_blur_images(original, num_images, max_radius=25):
         blurred_images = []
         for i in range(1, num_images+1):
             # radius increases with blur level
@@ -104,11 +102,27 @@ class FocusUtils:
     @staticmethod
     def laplacian_sharpness(image):
         # Apply the Laplacian filter to find edges
+        # Laplacian = �f/x� + �f/y�
+        # �f/x� H [f(x+1,y) - f(x,y)] - [f(x,y) - f(x-1,y)] = f(x+1,y) - 2f(x,y) + f(x-1,y)
+        # �f/y� H [f(x,y+1) - f(x,y)] - [f(x,y) - f(x,y-1)] = f(x,y+1) - 2f(x,y) + f(x,y-1)
+        # Laplacian = difference of gradients = second derivative
+        # In edge, the difference of gradients is bigger!
         # cv2.CV_64F prevents data overflow when calculating differences
         laplacian = cv2.Laplacian(image, cv2.CV_64F)
         # Calculate the variance (how much the edges pop out)
-        var = laplacian.var()
-        sharpness_score = var
+        sharpness_score = np.sqrt(laplacian.var())
+        return sharpness_score
+
+    @staticmethod
+    def tenengrad_sharpness(image):
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image
+        gX = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
+        gY = cv2.Sobel(gray, cv2.CV_64F, 0, 1)
+        magnitude = np.sqrt((gX ** 2) + (gY ** 2))
+        sharpness_score = magnitude.mean()
         return sharpness_score
 
 
@@ -120,36 +134,36 @@ class MainWindow(QMainWindow):
         self.prj_windows, self.prj_labels = self.create_projection_windows()
         self.cap = None
         self.timer = QTimer()
-        self.timer.timeout.connect(self.update_frame)
+        self.timer.timeout.connect(self.flush_preview)
 
         # for emulating autofocus
         self.max_moto_pos = 63
         self.min_moto_pos = 0
-        self.left_moto_pos = random.randint(self.min_moto_pos,  self.max_moto_pos)
-        self.left_best_pos = random.randint(self.min_moto_pos+2,  self.max_moto_pos-2)
-        self.right_moto_pos = random.randint(self.min_moto_pos,  self.max_moto_pos)
-        self.right_best_pos = random.randint(self.min_moto_pos+2,  self.max_moto_pos-2)
+        self.left_moto_pos = 0      # random.randint(self.min_moto_pos,  self.max_moto_pos) 
+        self.left_best_pos = 36     # random.randint(self.min_moto_pos+1,  self.max_moto_pos-1)
+        self.right_moto_pos = 0     # random.randint(self.min_moto_pos,  self.max_moto_pos)
+        self.right_best_pos = 36    # random.randint(self.min_moto_pos+1,  self.max_moto_pos-1)
         self.black_img = np.zeros((1080, 1920, 3), dtype=np.uint8)
 
-        # pattern = FocusUtils.chessboard_pattern(1920, 1080, 120, 120)
-        pattern = FocusUtils.image_pattern("D:/ws/images/brick_wall_1920x1280.jpg", 1920, 1080)
+        # also try brick_wall_1920x1280.jpg autofocus_target.png
+        pattern_path = "D:/ws/images/autofocus_target.png"
+        pattern = FocusUtils.image_pattern(pattern_path, 1920, 1080)
         generate_blur_images = FocusUtils.generate_pyramid_blur_images
         self.left_imgs = generate_blur_images(pattern, self.left_best_pos)[::-1]
         self.left_imgs += [pattern]
         self.left_imgs += generate_blur_images(pattern, self.max_moto_pos - self.left_best_pos)
-        # for i, img in enumerate(self.left_imgs):
-        #     sharpness = FocusUtils.laplacian_sharpness(img)
-        #     print(f"current pos: {i}, sharpness: {sharpness}, best pos: {self.left_best_pos}")
-        #     cv2.imshow("image", img)
-        #     cv2.waitKey(0)
-
         self.right_imgs = generate_blur_images(pattern, self.right_best_pos)[::-1]
         self.right_imgs += [pattern]
-        self.right_imgs += generate_blur_images(pattern, self.max_moto_pos - self.right_moto_pos)
-        # for i, img in enumerate(self.right_imgs):
-        #     print(f"current pos: {i}, best pos: {self.right_best_pos}")
-        #     cv2.imshow("image", img)
-        #     cv2.waitKey(0)
+        self.right_imgs += generate_blur_images(pattern, self.max_moto_pos - self.right_best_pos)
+
+        # load calib data, get dual-rojector roi
+        calib_file = "D:/ws/data/dual_projector_calib.yaml"
+        if os.path.isfile(calib_file):
+            fs = cv2.FileStorage(calib_file, cv2.FILE_STORAGE_READ) 
+            self.img_roi = fs.getNode("image_roi").mat()
+        else:
+            self.img_roi = None
+
 
     def closeEvent(self, event):
         self.stop_camera()
@@ -158,7 +172,7 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def crate_main_window(self):
-        self.setWindowTitle("Dual-Projector autofocus experiment")
+        self.setWindowTitle("Dual-projector autofocus")
         self.resize(800, 600)
         self.video_label = QLabel("Camera not started")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -203,13 +217,15 @@ class MainWindow(QMainWindow):
         self.start_camera_btn.setEnabled(True)
         self.stop_camera_btn.setEnabled(False)
 
-    def update_frame(self):
-        if self.cap is None:
-            return None
-        ret, image = self.cap.read()
-        if not ret:
-            self.stop_camera()
-            return None
+    def flush_preview(self):
+        if self.cap is not None:
+            ret, image = self.cap.read()
+            if ret:
+                self.update_preview(image)
+            else:
+                self.stop_camera()
+
+    def update_preview(self, image):
         h, w, c = image.shape
         bytes_per_line = c * w
         qimg = QImage(image.data, w, h, bytes_per_line, QImage.Format.Format_BGR888)
@@ -220,7 +236,6 @@ class MainWindow(QMainWindow):
             Qt.TransformationMode.SmoothTransformation
         )
         self.video_label.setPixmap(pixmap)
-        return image
 
     def emulate_autofocus(self):
         preview = self.cap is not None
@@ -232,7 +247,6 @@ class MainWindow(QMainWindow):
         # autofocus for left & right projectors
         for projector_id in [1, 2]:
             self.adjust_projector_focus(projector_id)
-            break
     
         # restore camera status
         if preview:
@@ -242,52 +256,88 @@ class MainWindow(QMainWindow):
 
     def adjust_projector_focus(self, projector_id):
         optimal_pose = self.left_best_pos if projector_id == 1 else self.right_best_pos
-        best_score = 0
-        best_pos = 0
-        
         # step 1: coarse sweeping
-        coarse_step = 4
         print(f"projector {projector_id}: starting coarse sweeping...")
-        for pos in range(self.min_moto_pos, self.max_moto_pos, coarse_step):
-            self.move_motor_to(projector_id, pos)
-            images = self.get_projection_images(projector_id)
-            self.project_images(images)
-            self.wait_ui(1)
-            frame = self.update_frame()
-            self.wait_ui(1)
-            score = FocusUtils.laplacian_sharpness(frame)
-            print(f"projector {projector_id}: position={pos}, sharpness={score}, best-position={optimal_pose}")
-            if score > best_score:
-                best_score = score
-                best_pos = pos
-            elif score < best_score * 0.6 and best_score > 0:
-                # if the score drops significantly, we passed the peak!
-                break
+        coarse_start, coarse_end = self.min_moto_pos, self.max_moto_pos + 1
+        coarse_step = 4
+        best_pos, best_score = self.search_optimal_pos(projector_id, coarse_start, coarse_end, coarse_step)
         print(f"projector {projector_id}: coarse-position={best_pos}, sharpness={best_score}, best-position={optimal_pose}")
-
         # step 2: fine sweeping
         print(f"projector {projector_id}: starting fine sweep...")
-        # define a small window around our best coarse position
         fine_start = max(self.min_moto_pos, best_pos - coarse_step)
-        fine_end = min(self.max_moto_pos, best_pos + coarse_step)
+        fine_end  = min(self.max_moto_pos, best_pos  + coarse_step + 1)
         fine_step = 1
-        # reset best score for fine calibration
+        best_pos, best_score = self.search_optimal_pos(projector_id, fine_start, fine_end, fine_step)
+        print(f"projector {projector_id}: final-position={best_pos}, sharpness={best_score}, best-position={optimal_pose}")
+        
+    def search_optimal_pos(self, projector_id, start, end, step):
         best_score = 0
-        for pos in range(fine_start, fine_end, fine_step):
+        best_pos = 0
+        history_scores = []
+        for pos in range(start, end, step):
             self.move_motor_to(projector_id, pos)
             images = self.get_projection_images(projector_id)
             self.project_images(images)
-            self.wait_ui(1)
-            frame = self.update_frame()
-            self.wait_ui(1)
-            score = FocusUtils.laplacian_sharpness(frame)
-            print(f"projector {projector_id}: position={pos}, sharpness={score}, best-position={optimal_pose}")
+            self.wait_ui(0.1)
+            frame = self.grab_latest_frame()
+            img = self.preprocess_frame(projector_id, frame)
+            score = FocusUtils.laplacian_sharpness(img)
+            cv2.putText(frame, f"Sharpness: {score:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255))
+            self.update_preview(frame)
+            self.wait_ui()
+            print(f"projector {projector_id}: position={pos}, sharpness={score}")
+            history_scores.append(score)
             if score > best_score:
                 best_score = score
                 best_pos = pos
-        print(f"projector {projector_id}: final-position={best_pos}, sharpness={best_score}, best-position={optimal_pose}")
-        
+            # if the score drops significantly, we passed the peak!
+            if len(history_scores) > 2:
+                stop = True
+                for i in range(-1, -3, -1):
+                    if history_scores[i] > history_scores[i-1]:
+                        stop = False
+                if stop:
+                    break
+        # move moto to best pos
+        if step == 1:
+            self.move_motor_to(projector_id, best_pos)
+            images = self.get_projection_images(projector_id)
+            self.project_images(images)
+            self.wait_ui(0.1)
+            frame = self.grab_latest_frame()
+            img = self.preprocess_frame(projector_id, frame)
+            score = FocusUtils.laplacian_sharpness(img)
+            cv2.putText(frame, f"Sharpness: {score:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255))
+            self.update_preview(frame)
+            self.wait_ui(3)
 
+        return best_pos, best_score
+
+    def grab_latest_frame(self):
+        for _ in range(11):
+            self.cap.grab()
+        _, frame = self.cap.read()
+        return frame
+
+    def preprocess_frame(self, projector_id, image):
+        if self.img_roi is None:
+            return image
+        # crop roi image
+        roi = self.img_roi[0] if projector_id == 1 else self.img_roi[1]
+        xs, ys = roi[:,0], roi[:,1]
+        w, h = image.shape[1::-1]
+        x_start = min(max(0, int(xs.min())), w-1)
+        x_end   = min(max(1, int(xs.max())), w)
+        y_start = min(max(0, int(ys.min())), h-1)
+        y_end   = min(max(1, int(ys.max())), h)
+        image = np.copy(image[y_start:y_end, x_start:x_end])
+        # convert to gray
+        if len(image.shape) == 3:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # gaussian filter
+        image = cv2.GaussianBlur(image, ksize=(3, 3), sigmaX=0.8)
+        return image
+        
     def move_motor_to(self, projecotr_id, moto_pos):
         # emulator stepper/servo motor moving
         target_pos = max(self.min_moto_pos, min(moto_pos, self.max_moto_pos))
@@ -307,12 +357,8 @@ class MainWindow(QMainWindow):
 
     def get_projection_images(self, projector_id):
         if projector_id == 1:
-            if self.left_moto_pos < self.min_moto_pos or self.left_moto_pos > self.max_moto_pos:
-                pass
             return self.left_imgs[self.left_moto_pos], self.black_img
         else:
-            if self.right_moto_pos < self.min_moto_pos or self.right_moto_pos > self.max_moto_pos:
-                pass
             return self.black_img, self.right_imgs[self.right_moto_pos]
 
     def create_projection_windows(self):
@@ -341,8 +387,11 @@ class MainWindow(QMainWindow):
             label.setPixmap(pixmap)
             window.show()
 
-    def wait_ui(self, seconds):
-        QTimer.singleShot(300, lambda: time.sleep(seconds))
+    def wait_ui(self, seconds=0):
+        QApplication.processEvents()
+        if seconds > 0:
+            # QTimer.singleShot(1000*seconds, lambda: ())
+            QTimer.singleShot(0, lambda: time.sleep(seconds))
         QApplication.processEvents()
 
 
